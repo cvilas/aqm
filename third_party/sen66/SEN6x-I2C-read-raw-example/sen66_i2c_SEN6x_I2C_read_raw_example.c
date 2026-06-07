@@ -69,28 +69,31 @@ int main(void) {
     uint16_t raw_co2 = 0;
     uint16_t repetition = 0;
 
-    for (repetition = 0; repetition < 100; repetition++) {
+    while(repetition < 100) {
         error = sen66_get_data_ready(&padding, &data_ready);
         if (error != NO_ERROR) {
             printf("error executing get_data_ready(): %i\n", error);
             continue;
         }
-        if (data_ready) {
-            //
-            // Readout raw data from the sensor
-            error = sen66_read_measured_raw_values(
-                &raw_humidity, &raw_temperature, &raw_voc, &raw_nox, &raw_co2);
-            if (error != NO_ERROR) {
-                printf("error executing read_measured_raw_values(): %i\n",
-                       error);
-                continue;
-            }
-            printf("Raw humidity: %i\n", raw_humidity);
-            printf("Raw temperature: %i\n", raw_temperature);
-            printf("Raw VOC index: %u\n", raw_voc);
-            printf("Raw NOX index: %u\n", raw_nox);
-            printf("Raw CO₂: %u\n", raw_co2);
+        if(!data_ready) {
+          sensirion_hal_sleep_us(1000000);
+          continue;
         }
+        repetition++;
+        //
+        // Readout raw data from the sensor
+        error = sen66_read_measured_raw_values(
+            &raw_humidity, &raw_temperature, &raw_voc, &raw_nox, &raw_co2);
+        if (error != NO_ERROR) {
+            printf("error executing read_measured_raw_values(): %i\n",
+                  error);
+            continue;
+        }
+        printf("Raw humidity: %i %\n", raw_humidity/100);
+        printf("Raw temperature: %i C\n", raw_temperature/200);
+        printf("Raw VOC index: %u\n", raw_voc);
+        printf("Raw NOX index: %u\n", raw_nox);
+        printf("Raw CO₂: %u\n", raw_co2);
     }
 
     return NO_ERROR;

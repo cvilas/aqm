@@ -39,9 +39,19 @@
 #include "sensirion_common.h"
 #include "sensirion_i2c_hal.h"
 #include <inttypes.h>  // PRIx64
+#include <math.h>
 #include <stdio.h>     // printf
 
 #define sensirion_hal_sleep_us sensirion_i2c_hal_sleep_usec
+
+static void print_measurement(const char* label, float value) {
+    if (isnan(value)) {
+        printf("%s: n/a ", label);
+        return;
+    }
+
+    printf("%s: %.2f ", label, value);
+}
 
 int main(void) {
     int16_t error = NO_ERROR;
@@ -78,9 +88,21 @@ int main(void) {
     float nox_index = 0.0;
     uint16_t co2 = 0;
     uint16_t repetition = 0;
+    bool data_ready = false;
+    uint8_t padding = 0;
 
-    for (repetition = 0; repetition < 100; repetition++) {
-        sensirion_hal_sleep_us(1000000);
+    for (repetition = 0; repetition < 100000; repetition++) {
+        error = sen66_get_data_ready(&padding, &data_ready);
+        if (error != NO_ERROR) {
+            printf("error executing get_data_ready(): %i\n", error);
+            continue;
+        }
+
+        if (!data_ready) {
+            sensirion_hal_sleep_us(1000000);
+            continue;
+        }
+
         error = sen66_read_measured_values(
             &mass_concentration_pm1p0, &mass_concentration_pm2p5,
             &mass_concentration_pm4p0, &mass_concentration_pm10p0, &humidity,
@@ -89,15 +111,20 @@ int main(void) {
             printf("error executing read_measured_values(): %i\n", error);
             continue;
         }
-        printf("mass_concentration_pm1p0: %.2f ", mass_concentration_pm1p0);
-        printf("mass_concentration_pm2p5: %.2f ", mass_concentration_pm2p5);
-        printf("mass_concentration_pm4p0: %.2f ", mass_concentration_pm4p0);
-        printf("mass_concentration_pm10p0: %.2f ", mass_concentration_pm10p0);
-        printf("humidity: %.2f ", humidity);
-        printf("temperature: %.2f ", temperature);
-        printf("voc_index: %.2f ", voc_index);
-        printf("nox_index: %.2f ", nox_index);
-        printf("co2: %u\n", co2);
+        
+        print_measurement("mass_concentration_pm1p0", mass_concentration_pm1p0);
+        print_measurement("mass_concentration_pm2p5", mass_concentration_pm2p5);
+        print_measurement("mass_concentration_pm4p0", mass_concentration_pm4p0);
+        print_measurement("mass_concentration_pm10p0", mass_concentration_pm10p0);
+        print_measurement("humidity", humidity);
+        print_measurement("temperature", temperature);
+        print_measurement("voc_index", voc_index);
+        print_measurement("nox_index", nox_index);
+        if (co2 == UINT16_MAX) {
+            printf("co2: n/a\n");
+        } else {
+            printf("co2: %u\n", co2);
+        }
     }
 
     error = sen66_stop_measurement();
