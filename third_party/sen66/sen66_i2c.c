@@ -41,6 +41,8 @@
 #include "sensirion_i2c.h"
 #include "sensirion_i2c_hal.h"
 
+#include <math.h>
+
 #define sensirion_hal_sleep_us sensirion_i2c_hal_sleep_usec
 
 static uint8_t communication_buffer[48] = {0};
@@ -54,12 +56,20 @@ void sen66_init(uint8_t i2c_address) {
 float sen66_signal_divided_by_10_uint16(uint16_t scaled_integer_value) {
     float divided_by_10_uint16 = 0.0;
 
+    if (scaled_integer_value == UINT16_MAX) {
+        return NAN;
+    }
+
     divided_by_10_uint16 = scaled_integer_value / 10.0;
     return divided_by_10_uint16;
 }
 
 float sen66_signal_divided_by_10_int16(int16_t scaled_integer_value) {
     float divided_by_10_int16 = 0.0;
+
+    if (scaled_integer_value == INT16_MAX) {
+        return NAN;
+    }
 
     divided_by_10_int16 = scaled_integer_value / 10.0;
     return divided_by_10_int16;
@@ -68,12 +78,20 @@ float sen66_signal_divided_by_10_int16(int16_t scaled_integer_value) {
 float sen66_signal_temperature(int16_t temperature_raw) {
     float temperature = 0.0;
 
+    if (temperature_raw == INT16_MAX) {
+        return NAN;
+    }
+
     temperature = temperature_raw / 200.0;
     return temperature;
 }
 
 float sen66_signal_humidity(int16_t humidity_raw) {
     float humidity = 0.0;
+
+    if (humidity_raw == INT16_MAX) {
+        return NAN;
+    }
 
     humidity = humidity_raw / 100.0;
     return humidity;
