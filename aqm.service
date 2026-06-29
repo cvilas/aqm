@@ -1,0 +1,30 @@
+[Unit]
+Description=Air Quality Monitor
+# Start only once the network stack is fully up (needed for Open-Meteo fetch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── edit these three lines to match your Pi ──────────────────────────────────
+User=vilas
+WorkingDirectory=/home/vilas/projects/aqm
+ExecStart=/home/vilas/projects/aqm/.venv/bin/python3 -m src.main \
+    --lat 51.5074 --lon -0.1278
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Restart automatically if the process exits unexpectedly.
+# 'on-failure' skips restart on clean exit (e.g. SIGTERM from systemctl stop).
+Restart=on-failure
+RestartSec=10
+
+# Give the process up to 30 s to shut down gracefully before killing it.
+TimeoutStopSec=30
+
+# Write logs to the journal (view with: journalctl -u aqm -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aqm
+
+[Install]
+WantedBy=multi-user.target

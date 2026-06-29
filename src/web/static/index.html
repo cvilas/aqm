@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Air Quality Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2e3145;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --green:  #22c55e;
+      --yellow: #eab308;
+      --orange: #f97316;
+      --red:    #ef4444;
+      --accent: #6366f1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; }
+    #status {
+      display: flex; align-items: center; gap: 8px;
+      font-size: .8rem; color: var(--muted);
+    }
+    #last-update {
+      font-size: .8rem; color: var(--muted);
+      white-space: nowrap;
+    }
+    #dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555; transition: background .3s;
+    }
+    #dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #battery {
+      font-size: .8rem; color: var(--muted);
+      background: var(--border); padding: 2px 8px; border-radius: 10px;
+    }
+
+    /* ── readout tiles ── */
+    #tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 12px;
+      padding: 16px 20px;
+    }
+    .tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .tile .label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .tile .value { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+    .tile .unit  { font-size: .75rem; color: var(--muted); }
+    .tile.green  { border-color: var(--green);  }
+    .tile.yellow { border-color: var(--yellow); }
+    .tile.orange { border-color: var(--orange); }
+    .tile.red    { border-color: var(--red);    }
+    .tile.ref    { border-color: var(--border); opacity: .85; }
+
+    /* ── charts ── */
+    #charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 12px;
+      padding: 0 20px 20px;
+    }
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .chart-card h2 { font-size: .8rem; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .06em; }
+    .chart-card canvas { width: 100% !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>&#x1F4A8; Air Quality Monitor</h1>
+  <div id="status">
+    <div id="dot"></div>
+    <span id="status-text">Connecting…</span>
+  </div>
+  <div id="last-update">Last update: --</div>
+  <div id="battery">BAT –</div>
+</header>
+
+<div id="tiles"></div>
+<div id="charts"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Severity thresholds – sourced from Sensirion SEN6x datasheet and app notes:
+//
+// CO2      PS_DS_SEN6x.pdf §1.5 + IAQ_Brochure.pdf
+//            400–5000 ppm sensor range; cognitive decline from ~950 ppm,
+//            sleep disruption 750–1000 ppm, deep sleep decrease at 1300 ppm
+// PM2.5    IAQ_Brochure.pdf (EU limit 25 µg/m³, WHO 24-h guideline 15 µg/m³)
+// PM10     WHO annual 15 µg/m³ / 24-h 45 µg/m³; EU daily limit 50 µg/m³
+// PM1.0    No direct standard; scaled proportionally from PM2.5 thresholds
+// PM4.0    No direct standard; scaled proportionally from PM2.5 thresholds
+// VOC      Info_Note_VOC_Index.pdf – scale 1–500, baseline 100;
+//            air-purifier trigger recommended at >150
+// NOx      Info_Note_NOx_Index.pdf – scale 1–500, baseline 1;
+//            air-purifier trigger recommended at >20
+// Temp/RH  IAQ_Brochure.pdf – comfortable: 20–25 °C and 40–60 %RH
+//            (bidirectional: both too low and too high are bad)
+// ---------------------------------------------------------------------------
+
+// "upper" bands: [max_inclusive, class] – higher value = worse
+// "range" bands: comfort zone – both extremes degrade the class
+const THRESHOLDS = {
+  co2:       { type:"upper", bands:[[600,"green"],[1000,"yellow"],[1500,"orange"],[Infinity,"red"]] },
+  pm1_0:     { type:"upper", bands:[[5,"green"],[15,"yellow"],[30,"orange"],[Infinity,"red"]] },
+  pm2_5:     { type:"upper", bands:[[10,"green"],[25,"yellow"],[50,"orange"],[Infinity,"red"]] },
+  pm4_0:     { type:"upper", bands:[[15,"green"],[35,"yellow"],[70,"orange"],[Infinity,"red"]] },
+  pm10_0:    { type:"upper", bands:[[20,"green"],[45,"yellow"],[100,"orange"],[Infinity,"red"]] },
+  voc_index: { type:"upper", bands:[[100,"green"],[150,"yellow"],[250,"orange"],[Infinity,"red"]] },
+  nox_index: { type:"upper", bands:[[20,"green"],[50,"yellow"],[150,"orange"],[Infinity,"red"]] },
+  // Bidirectional: [good_lo, good_hi, moderate_lo, moderate_hi, poor_lo, poor_hi]
+  temperature: { type:"range", good:[20,25], moderate:[17,28], poor:[14,32] },
+  humidity:    { type:"range", good:[40,60], moderate:[30,70], poor:[20,80] },
+};
+
+const LINE_COLORS = {
+  green:  "#22c55e",
+  yellow: "#eab308",
+  orange: "#f97316",
+  red:    "#ef4444",
+};
+
+function severityClass(key, val) {
+  if (val === null || val === undefined) return "green";
+  const spec = THRESHOLDS[key];
+  if (!spec) return "green";
+
+  if (spec.type === "range") {
+    const inRange = (v, lo, hi) => v >= lo && v <= hi;
+    if (inRange(val, spec.good[0],     spec.good[1]))     return "green";
+    if (inRange(val, spec.moderate[0], spec.moderate[1])) return "yellow";
+    if (inRange(val, spec.poor[0],     spec.poor[1]))     return "orange";
+    return "red";
+  }
+
+  // type === "upper"
+  for (const [limit, cls] of spec.bands) {
+    if (val <= limit) return cls;
+  }
+  return "red";
+}
+
+// ---------------------------------------------------------------------------
+// Tile definitions
+// ---------------------------------------------------------------------------
+const TILE_DEFS = [
+  { key: "co2",         label: "CO₂",        unit: "ppm"   },
+  { key: "pm1_0",       label: "PM1.0",       unit: "µg/m³" },
+  { key: "pm2_5",       label: "PM2.5",       unit: "µg/m³" },
+  { key: "pm4_0",       label: "PM4.0",       unit: "µg/m³" },
+  { key: "pm10_0",      label: "PM10",        unit: "µg/m³" },
+  { key: "temperature", label: "Temperature", unit: "°C"    },
+  { key: "humidity",    label: "Humidity",    unit: "%RH"   },
+  { key: "voc_index",   label: "VOC Index",   unit: ""      },
+  { key: "nox_index",   label: "NOx Index",   unit: ""      },  { key: "pressure_hpa", label: "Ref Pressure", unit: "hPa", ref: true },];
+
+// ---------------------------------------------------------------------------
+// Chart definitions (each may combine multiple keys onto one chart)
+// ---------------------------------------------------------------------------
+const CHART_DEFS = [
+  { title: "CO₂ (ppm)",                  keys: ["co2"]                          },
+  { title: "Particulate Matter (µg/m³)", keys: ["pm1_0","pm2_5","pm4_0","pm10_0"] },
+  { title: "Temperature (°C)",           keys: ["temperature"]                  },
+  { title: "Humidity (%RH)",             keys: ["humidity"]                     },
+  { title: "VOC Index",                  keys: ["voc_index"]                    },
+  { title: "NOx Index",                  keys: ["nox_index"]                    },
+];
+
+const KEY_COLORS_CHART = {
+  co2:         "#6366f1",
+  pm1_0:       "#22c55e",
+  pm2_5:       "#eab308",
+  pm4_0:       "#f97316",
+  pm10_0:      "#ef4444",
+  temperature: "#f43f5e",
+  humidity:    "#38bdf8",
+  voc_index:   "#a78bfa",
+  nox_index:   "#fb923c",
+};
+
+const MAX_POINTS = 3600; // 1 hour at 1 Hz
+
+// ---------------------------------------------------------------------------
+// Build DOM
+// ---------------------------------------------------------------------------
+const tilesEl  = document.getElementById("tiles");
+const chartsEl = document.getElementById("charts");
+
+const tileEls = {};
+TILE_DEFS.forEach(({ key, label, unit }) => {
+  const div = document.createElement("div");
+  div.className = "tile";
+  div.innerHTML = `<span class="label">${label}</span>
+                   <span class="value" id="val-${key}">–</span>
+                   <span class="unit" id="unit-${key}">${unit}</span>`;
+  tilesEl.appendChild(div);
+  tileEls[key] = div;
+});
+
+// Build chart instances
+const chartInstances = {};
+const chartDatasets = {};   // key → dataset ref
+
+CHART_DEFS.forEach(({ title, keys }) => {
+  const card = document.createElement("div");
+  card.className = "chart-card";
+  card.innerHTML = `<h2>${title}</h2><canvas></canvas>`;
+  chartsEl.appendChild(card);
+  const canvas = card.querySelector("canvas");
+
+  const datasets = keys.map(k => ({
+    label: k,
+    data: [],
+    borderColor: KEY_COLORS_CHART[k] || "#888",
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: 0.3,
+  }));
+
+  datasets.forEach((ds, i) => {
+    chartDatasets[`${title}__${keys[i]}`] = ds;
+  });
+
+  const chart = new Chart(canvas, {
+    type: "line",
+    data: { labels: [], datasets },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 2.4,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: {
+          ticks: { color: "#8892a4", maxTicksLimit: 6, maxRotation: 0 },
+          grid:  { color: "#1e2130" },
+        },
+        y: {
+          ticks: { color: "#8892a4" },
+          grid:  { color: "#1e2130" },
+        },
+      },
+      plugins: {
+        legend: {
+          display: keys.length > 1,
+          labels: { color: "#e2e8f0", boxWidth: 12 },
+        },
+        tooltip: {
+          backgroundColor: "#1a1d27",
+          borderColor: "#2e3145",
+          borderWidth: 1,
+          titleColor: "#e2e8f0",
+          bodyColor: "#8892a4",
+        },
+      },
+    },
+  });
+
+  chartInstances[title] = { chart, keys };
+});
+
+// ---------------------------------------------------------------------------
+// Data update
+// ---------------------------------------------------------------------------
+function formatTS(ts) {
+  return ts ? ts.slice(11, 19) : "";
+}
+
+function formatLastUpdate(ts) {
+  const parsed = ts ? new Date(ts) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) return "--";
+  return parsed.toLocaleString();
+}
+
+/** Update the readout tiles and header meta for a single frame. */
+function updateTiles(frame) {
+  document.getElementById("last-update").textContent =
+    `Last update: ${formatLastUpdate(frame.ts)}`;
+
+  TILE_DEFS.forEach(({ key, ref }) => {
+    const val   = frame[key];
+    const el    = tileEls[key];
+    const valEl = document.getElementById(`val-${key}`);
+    valEl.textContent = (val !== null && val !== undefined)
+      ? val.toFixed(key === "co2" || key === "pressure_hpa" ? 0 : 1) : "–";
+    if (ref) {
+      el.className = "tile ref";
+      valEl.style.color = "var(--muted)";
+      // Show lat/lon as the unit line for the pressure tile
+      if (key === "pressure_hpa" && frame.pressure_lat != null) {
+        const lat = frame.pressure_lat.toFixed(2);
+        const lon = frame.pressure_lon.toFixed(2);
+        document.getElementById(`unit-${key}`).textContent =
+          `hPa \u00b7 ${lat}, ${lon}`;
+      }
+    } else {
+      const cls = severityClass(key, val);
+      el.className = "tile " + cls;
+      valEl.style.color = LINE_COLORS[cls];
+    }
+  });
+
+  if (frame.ups && frame.ups.percent !== undefined) {
+    document.getElementById("battery").textContent =
+      `BAT ${frame.ups.percent.toFixed(0)}%`;
+  }
+}
+
+/** Append one frame's values to every chart dataset (no render). */
+function pushToCharts(frame) {
+  const ts = formatTS(frame.ts);
+  CHART_DEFS.forEach(({ title, keys }) => {
+    const { chart } = chartInstances[title];
+    chart.data.labels.push(ts);
+    keys.forEach(k => {
+      const ds = chartDatasets[`${title}__${k}`];
+      if (ds) ds.data.push(frame[k] !== undefined ? frame[k] : null);
+    });
+  });
+}
+
+/** Trim every chart to MAX_POINTS and call update once per chart. */
+function trimAndRenderAll() {
+  CHART_DEFS.forEach(({ title }) => {
+    const { chart } = chartInstances[title];
+    const excess = chart.data.labels.length - MAX_POINTS;
+    if (excess > 0) {
+      chart.data.labels.splice(0, excess);
+      chart.data.datasets.forEach(ds => ds.data.splice(0, excess));
+    }
+    chart.update("none");
+  });
+}
+
+/** Handle a single live reading: update tiles + chart, then render. */
+function applyFrame(frame) {
+  updateTiles(frame);
+  pushToCharts(frame);
+  trimAndRenderAll();
+}
+
+/**
+ * Bulk-load the history backlog without calling chart.update() on every
+ * frame – that would freeze the browser for 3600 iterations.
+ * Tiles are updated only for the last (most recent) frame.
+ */
+function applyHistory(frames) {
+  if (!frames.length) return;
+  frames.forEach(pushToCharts);
+  updateTiles(frames[frames.length - 1]);
+  trimAndRenderAll();
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket connection
+// ---------------------------------------------------------------------------
+const dot        = document.getElementById("dot");
+const statusText = document.getElementById("status-text");
+
+function connect() {
+  const wsUrl = `ws://${location.host}/ws`;
+  const ws    = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    dot.classList.add("live");
+    statusText.textContent = "Live";
+  };
+
+  ws.onmessage = evt => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    if (msg.type === "history") {
+      applyHistory(msg.data);
+    } else if (msg.type === "reading") {
+      applyFrame(msg.data);
+    }
+  };
+
+  ws.onclose = () => {
+    dot.classList.remove("live");
+    statusText.textContent = "Reconnecting…";
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+</script>
+</body>
+</html>
