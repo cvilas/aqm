@@ -1,5 +1,9 @@
 # Air Quality Monitor (AQM)
 
+## Web browser interface
+
+![Browser interface](./docs/screenshot.png)
+
 ## Components
 
 | Component | Interface |
