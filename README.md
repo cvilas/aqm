@@ -9,7 +9,6 @@
 | Component | Interface |
 |---|---|
 | Sensirion SEN66 (CO₂, PM, VOC, NOx, T, RH) [[info](https://sensirion.com/products/catalog/SEN66)] | I²C bus 1, addr 0x6B |
-| Waveshare 2.13" e-ink display B V4 250×122 [[info](https://www.waveshare.com/wiki/2.13inch_e-Paper_HAT_(B))] | SPI + GPIO |
 | Waveshare UPS HAT (C) [[info](https://www.waveshare.com/wiki/UPS_HAT_(C))] | I²C bus 1, addr 0x40 |
 | Raspberry Pi Zero 2 W [[info](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)] | – |
 
@@ -20,14 +19,12 @@ src/
   main.py        – async entry point; orchestrates all loops
   sensor.py      – SEN66 Python I²C driver (smbus2)
   ups.py         – UPS HAT INA219 driver (smbus2)
-  display.py     – Waveshare e-paper table renderer (Pillow)
   pressure.py    – Open-Meteo client for ambient pressure (CO₂ compensation)
   web/
     server.py    – aiohttp HTTP + WebSocket server
     static/
       index.html – Chart.js real-time dashboard
 third_party/
-  display/python – Waveshare EPD Python library (vendor)
   sen66/         – Reference C driver (used for protocol spec)
 ```
 
@@ -36,11 +33,10 @@ third_party/
 ```bash
 # System packages
 sudo apt update
-sudo apt install python3-pip python3-smbus python3-pil \
-                 python3-spidev python3-gpiozero gpiod libgpiod-dev
+sudo apt install python3-pip python3-smbus
 
-# Enable I²C + SPI
-sudo raspi-config  # Interfacing → I2C → Yes, SPI → Yes
+# Enable I²C
+sudo raspi-config  # Interfacing → I2C → Yes
 sudo reboot
 
 # Python packages (using uv – recommended)
@@ -49,9 +45,6 @@ uv pip install -r requirements.txt
 
 # Run with CO₂ pressure compensation (recommended)
 python3 -m src.main --lat 51.5074 --lon -0.1278
-
-# Also enable the e-paper display when it is attached
-python3 -m src.main --lat 51.5074 --lon -0.1278 --display
 
 # Run without pressure compensation (sensor defaults to 1013 hPa)
 python3 -m src.main
@@ -112,8 +105,7 @@ flowchart TD
         subgraph LOOP["asyncio event loop"]
             PL["pressure_loop\n1 / 15 min"]
             SL["sensor_loop\n1 Hz"]
-            DL["display_loop\n1 / 60 s"]
-            PL ~~~ SL ~~~ DL
+            PL ~~~ SL
         end
 
         WEB["Web server\naiohttp · port 8080\nGET /  ·  GET /ws  ·  GET /history"]
@@ -121,7 +113,6 @@ flowchart TD
 
         SEN["SEN66  ·  I²C 0x6B\nCO₂ · PM1/2.5/4/10 · VOC · NOx · T · RH"]
         UPS["UPS HAT / INA219  ·  I²C 0x43\nvoltage · current · SoC"]
-        EPD["e-paper display  ·  SPI\nWaveshare 2.13″ 250×122"]
     end
 
     OM(["Open-Meteo\nHTTPS · no auth"])
@@ -129,7 +120,6 @@ flowchart TD
     %% hardware under the loops that own them
     SL --> SEN
     SL --> UPS
-    DL --> EPD
 
     %% sensor loop feeds the web layer
     SL -->|"JSON frame"| WEB
@@ -161,19 +151,4 @@ Derived from Sensirion SEN6x datasheet (PS_DS_SEN6x.pdf), IAQ Brochure, and Sens
 | Temperature (°C) | 20–25 | 17–28 | 14–32 | outside 14–32 | IAQ brochure: comfortable range 20–25 °C |
 | Humidity (%RH) | 40–60 | 30–70 | 20–80 | outside 20–80 | IAQ brochure: comfortable range 40–60 %RH |
 
-## Known notes
-
-- The local SEN66 driver snapshot (1.7.1) corrects command ID
-  `READ_MEASURED_VALUES_AS_INTEGERS` to `0x0300` (upstream 1.3.0 erroneously
-  used `0x0414`).
-- The e-paper display requires SPI enabled and the Waveshare vendor library
-  present under `third_party/display/python/lib/`.
-
-## TODO
-
-- [ ] Project box - physical layout following sen66 app notes
-- [ ] Permanently install
-- [ ] Review how to calibrate
-- [ ] Review code and understand how it works.
-- [ ] Integrate sources properly
 

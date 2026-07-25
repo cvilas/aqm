@@ -1,12 +1,11 @@
 """
 AQM main entry point.
 
-Orchestrates four concurrent loops:
+Orchestrates three concurrent loops:
   1. Sensor loop    – reads SEN66 every second, broadcasts via WebSocket
-  2. Display loop   – updates the e-paper every 60 seconds
-  3. Pressure loop  – fetches ambient pressure from Open-Meteo every 15 min
+  2. Pressure loop  – fetches ambient pressure from Open-Meteo every 15 min
                        and feeds it to the SEN66 for CO₂ compensation
-  4. Web server     – serves the dashboard and WebSocket
+  3. Web server     – serves the dashboard and WebSocket
 
 Run with:
   python -m src.main
@@ -48,13 +47,6 @@ except Exception as exc:
     logger.warning("UPS unavailable (%s)", exc)
     _HAS_UPS = False
 
-try:
-    from .display import EpaperDisplay
-    _HAS_DISPLAY = True
-except Exception as exc:
-    logger.warning("e-paper unavailable (%s)", exc)
-    _HAS_DISPLAY = False
-
 from .web.server import AQMWebServer
 from .pressure import PressureClient
 
@@ -91,16 +83,13 @@ def _simulate_reading() -> dict:
 class AQMApp:
     def __init__(self, host: str = "0.0.0.0", port: int = 8080,
                  latitude: Optional[float] = None,
-                 longitude: Optional[float] = None,
-                 enable_display: bool = False) -> None:
+                 longitude: Optional[float] = None) -> None:
         self._host = host
         self._port = port
-        self._enable_display = enable_display
         self._server = AQMWebServer()
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aqm")
         self._sensor: Optional[object] = None
         self._ups: Optional[object] = None
-        self._display: Optional[object] = None
         self._last_reading: Optional[dict] = None
         self._running = False
         self._ambient_hpa: int = 1013  # updated by _pressure_loop
@@ -133,14 +122,6 @@ class AQMApp:
                 logger.error("UPS init failed: %s", exc)
                 _HAS_UPS = False
 
-        if _HAS_DISPLAY and self._enable_display:
-            try:
-                self._display = EpaperDisplay()
-                logger.info("e-paper display ready")
-            except Exception as exc:
-                logger.error("Display init failed: %s", exc)
-                _HAS_DISPLAY = False
-
     def _shutdown_hardware(self) -> None:
         if self._sensor is not None:
             try:
@@ -150,11 +131,6 @@ class AQMApp:
         if self._ups is not None:
             try:
                 self._ups.close()
-            except Exception:
-                pass
-        if self._display is not None:
-            try:
-                self._display.close()
             except Exception:
                 pass
 
@@ -193,34 +169,6 @@ class AQMApp:
         return frame
 
     # ------------------------------------------------------------------
-    # Display update (blocking – runs in executor)
-    # ------------------------------------------------------------------
-    def _update_display(self, reading: dict, ups_pct: Optional[float]) -> None:
-        if not (_HAS_DISPLAY and self._display is not None):
-            return
-        # Reconstruct an AQReading-like object from the dict
-        from .sensor import AQReading
-        import math as _math
-        def _f(v):
-            return _math.nan if v is None else float(v)
-
-        r = AQReading(
-            pm1_0=_f(reading.get("pm1_0")),
-            pm2_5=_f(reading.get("pm2_5")),
-            pm4_0=_f(reading.get("pm4_0")),
-            pm10_0=_f(reading.get("pm10_0")),
-            humidity=_f(reading.get("humidity")),
-            temperature=_f(reading.get("temperature")),
-            voc_index=_f(reading.get("voc_index")),
-            nox_index=_f(reading.get("nox_index")),
-            co2=reading.get("co2") if reading.get("co2") is not None else 0xFFFF,
-        )
-        try:
-            self._display.update(r, ups_pct)
-        except Exception as exc:
-            logger.error("Display update error: %s", exc)
-
-    # ------------------------------------------------------------------
     # Async loops
     # ------------------------------------------------------------------
     async def _sensor_loop(self) -> None:
@@ -237,21 +185,6 @@ class AQMApp:
             # Maintain ~1 Hz cadence
             elapsed = loop.time() - t0
             await asyncio.sleep(max(0.0, 1.0 - elapsed))
-
-    async def _display_loop(self) -> None:
-        loop = asyncio.get_running_loop()
-        while self._running:
-            await asyncio.sleep(60)
-            if self._last_reading is None:
-                continue
-            reading = self._last_reading
-            ups_pct = reading.get("ups", {}).get("percent") if reading.get("ups") else None
-            await loop.run_in_executor(
-                self._executor,
-                self._update_display,
-                reading,
-                ups_pct,
-            )
 
     async def _pressure_loop(self) -> None:
         """Fetch ambient pressure from Open-Meteo and push it to the SEN66
@@ -283,7 +216,6 @@ class AQMApp:
         await self._server.start(self._host, self._port)
 
         sensor_task   = asyncio.create_task(self._sensor_loop(),   name="sensor")
-        display_task  = asyncio.create_task(self._display_loop(),  name="display")
         pressure_task = asyncio.create_task(self._pressure_loop(), name="pressure")
 
         if self._pressure_client is not None:
@@ -295,13 +227,12 @@ class AQMApp:
         logger.info("AQM running – open http://%s:%d in your browser", self._host, self._port)
 
         try:
-            await asyncio.gather(sensor_task, display_task, pressure_task)
+            await asyncio.gather(sensor_task, pressure_task)
         except asyncio.CancelledError:
             pass
         finally:
             self._running = False
             sensor_task.cancel()
-            display_task.cancel()
             pressure_task.cancel()
             await self._server.stop()
             await loop.run_in_executor(self._executor, self._shutdown_hardware)
@@ -322,15 +253,13 @@ def main() -> None:
                         help="Latitude for Open-Meteo pressure fetch (enables CO₂ compensation)")
     parser.add_argument("--lon",  type=float, default=None,
                         help="Longitude for Open-Meteo pressure fetch")
-    parser.add_argument("--display", action="store_true", default=False,
-                        help="Enable the e-paper display (disabled by default)")
     args = parser.parse_args()
 
     if (args.lat is None) != (args.lon is None):
         parser.error("--lat and --lon must be provided together")
 
     app = AQMApp(host=args.host, port=args.port, latitude=args.lat,
-                 longitude=args.lon, enable_display=args.display)
+                 longitude=args.lon)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
