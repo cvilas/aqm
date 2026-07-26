@@ -1,7 +1,15 @@
 # Air Quality Monitor (AQM)
 
-## Web browser interface
+## Brief
 
+A _utility_ project to monitor domestic/indoor air quality. The device functions as a web server. 
+Builtin battery offers portability. Software was entirely vibe-coded over a weekend, but the code 
+is minimal and readable.
+
+**Hardware assembly** <br>
+![Hardware assemnly](./docs/hw.jpg)
+
+**Web browser interface** (`http://<ip-address>::8080`)<br>
 ![Browser interface](./docs/screenshot.png)
 
 ## Components
@@ -12,7 +20,7 @@
 | Waveshare UPS HAT (C) [[info](https://www.waveshare.com/wiki/UPS_HAT_(C))] | I²C bus 1, addr 0x40 |
 | Raspberry Pi Zero 2 W [[info](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)] | – |
 
-## Project layout
+## Software layout
 
 ```
 src/
@@ -50,7 +58,7 @@ python3 -m src.main --lat 51.5074 --lon -0.1278
 python3 -m src.main
 ```
 
-Open `http://<pi-address>:8080` in any browser.
+Open `http://<pi-address>:8080` in a web browser.
 
 ## Run as a systemd service (auto-start on boot)
 
@@ -150,5 +158,3 @@ Derived from Sensirion SEN6x datasheet (PS_DS_SEN6x.pdf), IAQ Brochure, and Sens
 | NOx Index | ≤ 20 | ≤ 50 | ≤ 150 | > 150 | 1 = baseline; Sensirion recommends air-purifier trigger at > 20 |
 | Temperature (°C) | 20–25 | 17–28 | 14–32 | outside 14–32 | IAQ brochure: comfortable range 20–25 °C |
 | Humidity (%RH) | 40–60 | 30–70 | 20–80 | outside 20–80 | IAQ brochure: comfortable range 40–60 %RH |
-
-
